@@ -2,12 +2,11 @@ name: 扫描币安U本位合约
 
 # 定时执行规则：
 # 采用 UTC 时间（比北京时间晚8小时）
-# 每4小时收盘后5分钟运行一次：00:05、04:05、08:05、12:05、16:05、20:05 (UTC)
-# 对应北京时间：08:05、12:05、16:05、20:05、00:05、04:05
+# 每小时第5分钟执行一次，对应北京时间每小时05分
 on:
   schedule:
-    - cron: '5 0,4,8,12,16,20 * * *'
-  workflow_dispatch: # 允许手动触发
+    - cron: '5 * * * *'  # 每小时执行一次（UTC 时间 xx:05）
+  workflow_dispatch:     # 保留手动触发功能
 
 jobs:
   run-scan:
@@ -32,5 +31,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: k线图表
-          path: match_*.png # 上传匹配到的币种图片
-        if: success() # 只有脚本运行成功才会上传（防止上传空文件）
+          path: match_*.png  # 上传匹配到的币种图片
+        if: success()         # 只有脚本运行成功才会上传（防止上传空文件）
