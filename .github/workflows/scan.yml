@@ -2,11 +2,11 @@ name: 扫描币安U本位合约
 
 # 定时执行规则：
 # 采用 UTC 时间（比北京时间晚8小时）
-# 每小时第5分钟执行一次，对应北京时间每小时05分
+# 每小时第5分钟自动执行一次
 on:
   schedule:
-    - cron: '5 * * * *'  # 每小时执行一次（UTC 时间 xx:05）
-  workflow_dispatch:     # 保留手动触发功能
+    - cron: '5 * * * *'
+  workflow_dispatch: # 允许手动触发
 
 jobs:
   run-scan:
@@ -22,14 +22,7 @@ jobs:
       - name: 安装依赖库
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas matplotlib
+          pip install requests pandas
 
       - name: 运行扫描脚本
         run: python scan_binance_4h_final.py
-
-      - name: 上传图表文件
-        uses: actions/upload-artifact@v4
-        with:
-          name: k线图表
-          path: match_*.png  # 上传匹配到的币种图片
-        if: success()         # 只有脚本运行成功才会上传（防止上传空文件）
