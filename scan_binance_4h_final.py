@@ -11,15 +11,15 @@ def send_wechat_notification(symbol, price, reason):
     """发送微信提醒（Server酱）"""
     url = "https://sctapi.ftqq.com/SCT32178TyIsGaxv6UsK7LUndka8fjg5.send"
     content = (
-        f"📈 **检测到震荡突破信号！**\n\n"
+        f"📈 **检测到稳健突破信号！**\n\n"
         f"💰 币种: {symbol}\n"
         f"💎 价格: {price:.6f}\n"
         f"📊 信号原因: {reason}\n"
         f"⏰ 时间: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-        f"✅ 状态：33日均线附近震荡 | 未跌破前低 | 放量突破阻力"
+        f"✅ 状态：33日均线附近震荡 | 未跌破前低 | 放量突破4小时关键阻力"
     )
     try:
-        resp = requests.get(url, params={"title": f"【震荡突破】{symbol}", "desp": content}, timeout=8)
+        resp = requests.get(url, params={"title": f"【稳健突破】{symbol}", "desp": content}, timeout=8)
         resp.raise_for_status()
         print(f"✅ 微信提醒发送成功: {symbol}")
     except Exception as e:
@@ -47,9 +47,24 @@ def get_perpetual_symbols():
         return []
 
 # ----------------------
-# 2. 获取4小时K线 + 2次重试（共3次）
+# 2. 获取 1小时 K线 (用于实时扫描) + 获取 4小时 K线 (用于计算4小时前高)
 # ----------------------
-def get_4h_klines(symbol, limit=100):
+def get_1h_klines(symbol, limit=100):
+    url = "https://fapi.binance.com/fapi/v1/klines"
+    params = {"symbol": symbol, "interval": "1h", "limit": limit}
+    for retry in range(3):
+        try:
+            resp = requests.get(url, params=params, timeout=12)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            if retry < 2:
+                time.sleep(1.5)
+                continue
+            print(f"⚠️ {symbol} 获取1小时K线失败")
+            return []
+
+def get_4h_klines_for_resistance(symbol, limit=100):
     url = "https://fapi.binance.com/fapi/v1/klines"
     params = {"symbol": symbol, "interval": "4h", "limit": limit}
     for retry in range(3):
@@ -61,7 +76,7 @@ def get_4h_klines(symbol, limit=100):
             if retry < 2:
                 time.sleep(1.5)
                 continue
-            print(f"⚠️ {symbol} 获取K线失败（已重试3次）")
+            print(f"⚠️ {symbol} 获取4小时K线失败")
             return []
 
 # ----------------------
@@ -86,69 +101,59 @@ def calc_indicators(df):
     return df
 
 # ----------------------
-# 4. ✅ 核心新形态：33日均线震荡 + 未跌破前低 + 放量突破阻力
-# 核心逻辑：
-# 1. 价格在MA33附近震荡（收盘价在MA33的±15%区间内）
-# 2. 最近未跌破前期重要低点（最近30根K线的最低价 ≥ 前期低点的98%）
-# 3. 放量突破关键阻力（突破前20根K线高点，且成交量≥5日均量的1.3倍）
-# 4. 过滤暴涨：MA5 ≤ MA10×1.1（防止像PIXEL这种已经涨太多的）
+# 4. 核心形态：MA33震荡 + 未破前低 + 放量突破【4小时】关键阻力
 # ----------------------
-def match_oscillation_breakout(df):
-    if len(df) < 33:
+def match_robust_breakout(df_1h, df_4h):
+    if len(df_1h) < 33 or len(df_4h) < 33:
         return False
 
-    last = df.iloc[-1]
-    # 最近30根K线数据
-    recent_30 = df.iloc[-30:]
-
+    last_1h = df_1h.iloc[-1]
+    recent_30_1h = df_1h.iloc[-30:]
+    
     # 1. 价格在MA33附近震荡（±15%）
-    near_ma33 = (last["close"] >= last["MA33"] * 0.85) and (last["close"] <= last["MA33"] * 1.15)
+    near_ma33 = (last_1h["close"] >= last_1h["MA33"] * 0.85) and (last_1h["close"] <= last_1h["MA33"] * 1.15)
 
-    # 2. 未跌破前期低点：最近30根K线的最低价 ≥ 前期低点（最近100根）的98%
-    all_time_low = df["low"].min()
-    recent_low = recent_30["low"].min()
+    # 2. 未跌破前期低点
+    all_time_low = df_1h["low"].min()
+    recent_low = recent_30_1h["low"].min()
     not_broke_low = (recent_low >= all_time_low * 0.98)
 
-    # 3. 突破关键阻力：突破前20根K线高点
-    key_resistance = df["high"].iloc[-20:-1].max()
-    break_resistance = (last["close"] > key_resistance)
+    # 3. 突破【4小时】前20根K线高点阻力 (这是关键修改)
+    key_resistance_4h = df_4h["high"].iloc[-20:-1].max()
+    break_resistance = (last_1h["close"] > key_resistance_4h)
 
-    # 4. 明显放量：成交量 ≥ 5日均量的1.3倍
-    strong_volume = (last["volume"] >= last["VOL_MA5"] * 1.3)
+    # 4. 明显放量
+    strong_volume = (last_1h["volume"] >= last_1h["VOL_MA5"] * 1.3)
 
-    # 5. 过滤暴涨：MA5 不高于 MA10 的1.1倍（避免追高）
-    ma_not_too_far = (last["MA5"] <= last["MA10"] * 1.1)
+    # 5. 不过度暴涨（防追高）
+    ma_not_too_far = (last_1h["MA5"] <= last_1h["MA10"] * 1.1)
 
-    # ✅ 综合判定
     return near_ma33 and not_broke_low and break_resistance and strong_volume and ma_not_too_far
 
 # ----------------------
-# 5. 画图函数
+# 画图
 # ----------------------
 def plot_chart(symbol, df, filename):
     try:
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
         
-        # 价格与均线
-        ax1.plot(df["close"], label="价格", color="#1f77b4", linewidth=1.5)
-        ax1.plot(df["MA5"], label="MA5", color="#ff7f0e", linewidth=1.2)
-        ax1.plot(df["MA10"], label="MA10", color="#2ca02c", linewidth=1.2)
-        ax1.plot(df["MA33"], label="MA33", color="#d62728", linewidth=1.2)
-        ax1.set_title(f"{symbol} 4H 震荡突破分析", fontsize=14)
-        ax1.legend(loc="upper left")
+        ax1.plot(df["close"], label="价格", linewidth=1.5)
+        ax1.plot(df["MA5"], label="MA5", linewidth=1.2)
+        ax1.plot(df["MA10"], label="MA10", linewidth=1.2)
+        ax1.plot(df["MA33"], label="MA33", linewidth=1.2)
+        ax1.set_title(f"{symbol} 1H 分析 (突破4小时阻力)")
+        ax1.legend()
         ax1.grid(alpha=0.3)
 
-        # MACD
-        ax2.bar(df.index, df["MACD"], label="MACD", color=df["MACD"].apply(lambda x: "#2ca02c" if x>0 else "#d62728"), alpha=0.6)
-        ax2.plot(df["DIF"], label="DIF", color="#1f77b4")
-        ax2.plot(df["DEA"], label="DEA", color="#ff7f0e")
-        ax2.legend(loc="upper left")
+        ax2.bar(df.index, df["MACD"], color=["#2ca02c" if x>0 else "#d62728" for x in df["MACD"]], alpha=0.6)
+        ax2.plot(df["DIF"], label="DIF")
+        ax2.plot(df["DEA"], label="DEA")
+        ax2.legend()
         ax2.grid(alpha=0.3)
 
-        # 成交量
-        ax3.bar(df.index, df["volume"], label="成交量", color="#1f77b4", alpha=0.7)
-        ax3.plot(df["VOL_MA5"], label="VOL_MA5", color="#ff7f0e")
-        ax3.legend(loc="upper left")
+        ax3.bar(df.index, df["volume"], alpha=0.7)
+        ax3.plot(df["VOL_MA5"], label="VOL_MA5", color="r")
+        ax3.legend()
         ax3.grid(alpha=0.3)
 
         plt.tight_layout()
@@ -158,49 +163,49 @@ def plot_chart(symbol, df, filename):
         print(f"⚠️ 画图失败: {e}")
 
 # ----------------------
-# 6. 主程序入口（15线程 + 收盘后5分钟 + 匹配上限10）
+# 主程序
 # ----------------------
 if __name__ == "__main__":
     symbols = get_perpetual_symbols()
     if not symbols:
-        print("❌ 未获取到合约列表，退出任务")
         exit()
 
-    count = 0
-    matched_symbols = []
-    print(f"\n开始扫描全市场 U 本位合约...\n")
+    matched = []
+    max_match = 10
 
-    # 15线程并行扫描
     with ThreadPoolExecutor(max_workers=15) as executor:
-        future_to_symbol = {executor.submit(get_4h_klines, s): s for s in symbols}
-        
-        for future in as_completed(future_to_symbol):
-            symbol = future_to_symbol[future]
-            klines = future.result()
+        # 提交所有任务
+        future_1h = {executor.submit(get_1h_klines, s): s for s in symbols}
+        future_4h = {executor.submit(get_4h_klines_for_resistance, s): s for s in symbols}
+
+        # 处理结果
+        for fut_1h in as_completed(future_1h):
+            symbol = future_1h[fut_1h]
+            klines_1h = fut_1h.result()
             
-            if not klines:
+            # 获取对应的4小时数据
+            klines_4h = future_4h[next(k for k, v in future_4h.items() if v == symbol)].result()
+
+            if not klines_1h or not klines_4h:
                 continue
-            
+
             try:
-                df = pd.DataFrame(klines, columns=[
-                    "t","o","h","l","c","v","1","2","3","4","5","6"
-                ])
-                df = calc_indicators(df)
+                df_1h = pd.DataFrame(klines_1h, columns=["t","o","h","l","c","v","1","2","3","4","5","6"])
+                df_4h = pd.DataFrame(klines_4h, columns=["t","o","h","l","c","v","1","2","3","4","5","6"])
                 
-                # 只检测新形态：33日均线震荡 + 未跌破前低 + 放量突破
-                if match_oscillation_breakout(df):
-                    last_price = float(df["close"].iloc[-1])
-                    reason = "✅ 33日均线震荡 | 未跌破前低 | 放量突破阻力"
-                    
-                    plot_chart(symbol, df, f"match_{symbol}.png")
+                df_1h = calc_indicators(df_1h)
+                df_4h = calc_indicators(df_4h) # 4h数据也需要计算指标来获取MA33等
+
+                if match_robust_breakout(df_1h, df_4h):
+                    last_price = float(df_1h["close"].iloc[-1])
+                    reason = "✅ MA33震荡 | 未破前低 | 放量突破【4小时】关键阻力"
+                    plot_chart(symbol, df_1h, f"match_{symbol}.png")
                     send_wechat_notification(symbol, last_price, reason)
-                    
-                    matched_symbols.append(symbol)
-                    count += 1
-                    if count >= 10: # 上限10个
+                    matched.append(symbol)
+                    if len(matched) >= max_match:
                         break
             except Exception as e:
-                # 容错：防止单个币种数据错误导致整个任务挂掉
+                # print(f"处理 {symbol} 时出错: {e}")
                 continue
 
-    print(f"\n扫描结束！本次匹配到 {count} 个震荡突破币种: {matched_symbols}")
+    print(f"\n扫描完成，符合条件币种: {len(matched)} → {matched}")
