@@ -1,23 +1,23 @@
-name: 扫描币安U本位合约
-on:
-  schedule:
-    - cron: '5 16-23 * * *'
-    - cron: '5 0-8 * * *'
-    workflow_dispatch:
+name: Scan Binance U本位 Perpetual
+ on:
+schedule:
+- cron: '5 16-23 * * *'
+- cron: '5 0-8 * * *' 
+workflow_dispatch:
 
-jobs:
-  run-scan:
-    runs-on: ubuntu-latest
+ jobs:
+ run-scan:
+runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4.2.2
-      - name: 设置 Python 环境
-        uses: actions/setup-python@v5
-        with:
+  - name: Checkout code
+    uses: actions/checkout@v4.2.2
+  - name: Setup Python
+    uses: actions/setup-python@v5
+    with:
           python-version: '3.10'
-      - name: 安装依赖库
-        run: |
+  - name: Install dependencies
+    run: |
           python -m pip install --upgrade pip
           pip install requests pandas python-binance
-      - name: 运行扫描脚本
+      - name: Run script
         run: python scan_binance_4h_final.py
