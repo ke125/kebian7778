@@ -57,30 +57,30 @@ def calc_indicators(df):
     return df
 
 # ----------------------
-# 3. 形态匹配函数（核心逻辑）
+# 3. 形态匹配函数（放宽版）
 # ----------------------
 def match_all_patterns(df):
-    """判断是否符合形态1或形态2"""
+    """判断是否符合形态1或形态2（放宽条件版）"""
     if len(df) < 33:
         return False  # 数据不足
     
     last = df.iloc[-1]
     prev = df.iloc[-2]
     
-    # --- 基础条件 ---
-    # 1. 均线多头排列
-    ma_bull = (last["MA5"] > last["MA10"]) and (last["MA10"] > last["MA33"])
-    # 2. 价格站在均线上方
-    price_above_ma = (last["close"] > last["MA5"])
-    # 3. MACD 金叉或多头
-    macd_bull = (last["DIF"] > last["DEA"]) and (last["MACD"] > 0)
-    # 4. 放量突破
-    volume_break = (last["volume"] > last["VOL_MA5"] * 1.5)
-    # 5. 价格突破近期高点
-    price_break = (last["close"] > df["high"].iloc[-20:-1].max())
+    # --- 基础条件（放宽版） ---
+    # 1. 均线多头排列（允许 MA5 略低于 MA10，但整体向上）
+    ma_bull = (last["MA5"] >= last["MA10"] * 0.995) and (last["MA10"] > last["MA33"])
+    # 2. 价格站在 MA5 或 MA10 上方
+    price_above_ma = (last["close"] > last["MA5"]) or (last["close"] > last["MA10"])
+    # 3. MACD 多头或刚金叉
+    macd_bull = (last["DIF"] > last["DEA"]) or (prev["DIF"] < prev["DEA"] and last["DIF"] > last["DEA"])
+    # 4. 放量突破（从 1.5 倍放宽到 1.2 倍）
+    volume_break = (last["volume"] > last["VOL_MA5"] * 1.2)
+    # 5. 价格突破近期高点（从 20 根放宽到 10 根）
+    price_break = (last["close"] > df["high"].iloc[-10:-1].max())
     
     # --- 形态判定 ---
-    # 形态1：完整多头突破
+    # 形态1：多头突破（放宽版）
     pattern1 = ma_bull and price_above_ma and macd_bull and volume_break and price_break
     # 形态2：底背离 + 突破（简化版）
     pattern2 = (last["close"] < prev["close"]) and (last["DIF"] > prev["DIF"]) and price_break
@@ -123,7 +123,7 @@ def plot_chart(symbol, df, filename):
     print(f"✅ 匹配成功: {symbol} → 已保存为 {filename}")
 
 # ----------------------
-# 5. 主程序入口
+# 5. 主程序入口（扫描前700个币种）
 # ----------------------
 if __name__ == "__main__":
     symbols = get_perpetual_symbols()
@@ -133,10 +133,11 @@ if __name__ == "__main__":
 
     count = 0
     matched_symbols = []
-    print(f"\n开始扫描 {len(symbols)} 个永续合约，扫描前 500 个...\n")
+    print(f"\n开始扫描 {len(symbols)} 个永续合约，扫描前 700 个...\n")
 
-    for i, symbol in enumerate(symbols[:500]):
-        print(f"[{i+1}/500] 正在扫描: {symbol}")
+    # 🔔 这里改成了 symbols[:700]
+    for i, symbol in enumerate(symbols[:700]):
+        print(f"[{i+1}/700] 正在扫描: {symbol}")
         klines = get_4h_klines(symbol)
         if not klines:
             print(f"⚠️ {symbol} 无K线数据，跳过\n")
