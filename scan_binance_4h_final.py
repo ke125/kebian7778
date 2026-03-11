@@ -3,9 +3,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import matplotlib.pyplot as plt
-plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei']
-plt.rcParams['axes.unicode_minus'] = False
 
 # ----------------------
 # 微信推送配置（Server酱）
@@ -14,15 +11,15 @@ def send_wechat_notification(symbol, price, reason):
     """发送微信提醒（Server酱）"""
     url = "https://sctapi.ftqq.com/SCT32178TyIsGaxv6UsK7LUndka8fjg5.send"
     content = (
-        f"📈 **检测到强势起涨信号！**\n\n"
+        f"📈 **检测到震荡突破信号！**\n\n"
         f"💰 币种: {symbol}\n"
         f"💎 价格: {price:.6f}\n"
         f"📊 信号原因: {reason}\n"
         f"⏰ 时间: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-        f"✅ 状态：刚突破阻力，均线刚刚拐头，**远离追高**。"
+        f"✅ 状态：33日均线附近震荡 | 未跌破前低 | 放量突破阻力"
     )
     try:
-        resp = requests.get(url, params={"title": f"【起涨点】{symbol}", "desp": content}, timeout=8)
+        resp = requests.get(url, params={"title": f"【震荡突破】{symbol}", "desp": content}, timeout=8)
         resp.raise_for_status()
         print(f"✅ 微信提醒发送成功: {symbol}")
     except Exception as e:
@@ -80,7 +77,6 @@ def calc_indicators(df):
     df["MA10"] = df["close"].rolling(10).mean()
     df["MA33"] = df["close"].rolling(33).mean()
     df["VOL_MA5"] = df["volume"].rolling(5).mean()
-    df["VOL_MA30"] = df["volume"].rolling(30).mean()
 
     exp1 = df["close"].ewm(span=12, adjust=False).mean()
     exp2 = df["close"].ewm(span=26, adjust=False).mean()
@@ -90,45 +86,41 @@ def calc_indicators(df):
     return df
 
 # ----------------------
-# 4. ✅ 最终版：不追高、只抓“刚突破”的起涨点形态
+# 4. ✅ 核心新形态：33日均线震荡 + 未跌破前低 + 放量突破阻力
 # 核心逻辑：
-# 1. MA10 > MA33 (大趋势向上)
-# 2. MA5 刚刚上穿 MA10 (刚金叉，不是追高)
-# 3. MA5 不高于 MA10 的 1.08 倍 (均线不远离，避免接盘)
-# 4. 价格突破前20根高点 (真突破)
-# 5. 明显放量 (1.3倍)
+# 1. 价格在MA33附近震荡（收盘价在MA33的±15%区间内）
+# 2. 最近未跌破前期重要低点（最近30根K线的最低价 ≥ 前期低点的98%）
+# 3. 放量突破关键阻力（突破前20根K线高点，且成交量≥5日均量的1.3倍）
+# 4. 过滤暴涨：MA5 ≤ MA10×1.1（防止像PIXEL这种已经涨太多的）
 # ----------------------
-def match_strong_bull_break(df):
+def match_oscillation_breakout(df):
     if len(df) < 33:
         return False
 
     last = df.iloc[-1]
-    prev = df.iloc[-2] # 引用上一根K线，用于判断金叉瞬间
+    # 最近30根K线数据
+    recent_30 = df.iloc[-30:]
 
-    # 1. 基础多头：MA10 必须大于 MA33（大趋势向好）
-    ma_basis = (last["MA10"] > last["MA33"])
+    # 1. 价格在MA33附近震荡（±15%）
+    near_ma33 = (last["close"] >= last["MA33"] * 0.85) and (last["close"] <= last["MA33"] * 1.15)
 
-    # 2. 核心限制：绝对不追高！
-    # 限制 5日均线 不能比 10日均线 高出超过 8%
-    # 这一步直接过滤掉 PIXEL 这种暴涨后远离均线的情况
-    ma_not_too_far = (last["MA5"] <= last["MA10"] * 1.08)
+    # 2. 未跌破前期低点：最近30根K线的最低价 ≥ 前期低点（最近100根）的98%
+    all_time_low = df["low"].min()
+    recent_low = recent_30["low"].min()
+    not_broke_low = (recent_low >= all_time_low * 0.98)
 
-    # 3. 均线刚刚拐头：MA5 刚刚上穿 MA10（金叉瞬间）
-    # 保证是起涨点，而不是已经跑了一段的高位
-    ma_just_turned = (last["MA5"] > last["MA10"]) and (prev["MA5"] <= prev["MA10"])
-
-    # 4. 价格必须在 MA5 上方（强势启动）
-    price_above_ma5 = (last["close"] > last["MA5"])
-
-    # 5. 突破关键阻力：突破前20根K线最高点
+    # 3. 突破关键阻力：突破前20根K线高点
     key_resistance = df["high"].iloc[-20:-1].max()
     break_resistance = (last["close"] > key_resistance)
 
-    # 6. 明显放量：至少是5日均量的 1.3 倍
+    # 4. 明显放量：成交量 ≥ 5日均量的1.3倍
     strong_volume = (last["volume"] >= last["VOL_MA5"] * 1.3)
 
-    # ✅ 综合判定：只有满足“刚金叉、刚突破、离均线不远”才触发
-    return ma_basis and ma_not_too_far and price_above_ma5 and break_resistance and strong_volume and ma_just_turned
+    # 5. 过滤暴涨：MA5 不高于 MA10 的1.1倍（避免追高）
+    ma_not_too_far = (last["MA5"] <= last["MA10"] * 1.1)
+
+    # ✅ 综合判定
+    return near_ma33 and not_broke_low and break_resistance and strong_volume and ma_not_too_far
 
 # ----------------------
 # 5. 画图函数
@@ -142,7 +134,7 @@ def plot_chart(symbol, df, filename):
         ax1.plot(df["MA5"], label="MA5", color="#ff7f0e", linewidth=1.2)
         ax1.plot(df["MA10"], label="MA10", color="#2ca02c", linewidth=1.2)
         ax1.plot(df["MA33"], label="MA33", color="#d62728", linewidth=1.2)
-        ax1.set_title(f"{symbol} 4H 起涨点分析", fontsize=14)
+        ax1.set_title(f"{symbol} 4H 震荡突破分析", fontsize=14)
         ax1.legend(loc="upper left")
         ax1.grid(alpha=0.3)
 
@@ -195,10 +187,10 @@ if __name__ == "__main__":
                 ])
                 df = calc_indicators(df)
                 
-                # 检测新形态（刚突破，不追高）
-                if match_strong_bull_break(df):
+                # 只检测新形态：33日均线震荡 + 未跌破前低 + 放量突破
+                if match_oscillation_breakout(df):
                     last_price = float(df["close"].iloc[-1])
-                    reason = "✅ 刚突破阻力 | MA5刚刚金叉 | 均线不远离"
+                    reason = "✅ 33日均线震荡 | 未跌破前低 | 放量突破阻力"
                     
                     plot_chart(symbol, df, f"match_{symbol}.png")
                     send_wechat_notification(symbol, last_price, reason)
@@ -211,4 +203,4 @@ if __name__ == "__main__":
                 # 容错：防止单个币种数据错误导致整个任务挂掉
                 continue
 
-    print(f"\n扫描结束！本次匹配到 {count} 个起涨币种: {matched_symbols}")
+    print(f"\n扫描结束！本次匹配到 {count} 个震荡突破币种: {matched_symbols}")
