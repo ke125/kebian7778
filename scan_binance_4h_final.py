@@ -123,7 +123,7 @@ def plot_chart(symbol, df, filename):
     print(f"✅ 匹配成功: {symbol} → 已保存为 {filename}")
 
 # ----------------------
-# 5. 主程序入口（扫描前700个币种）
+# 5. 主程序入口（扫描前1200个币种）
 # ----------------------
 if __name__ == "__main__":
     symbols = get_perpetual_symbols()
@@ -133,11 +133,11 @@ if __name__ == "__main__":
 
     count = 0
     matched_symbols = []
-    print(f"\n开始扫描 {len(symbols)} 个永续合约，扫描前 700 个...\n")
+    print(f"\n开始扫描 {len(symbols)} 个永续合约，扫描前 1200 个...\n")
 
-    # 🔔 这里改成了 symbols[:700]
-    for i, symbol in enumerate(symbols[:700]):
-        print(f"[{i+1}/700] 正在扫描: {symbol}")
+    # 🔔 这里改成了 symbols[:1200]
+    for i, symbol in enumerate(symbols[:1200]):
+        print(f"[{i+1}/1200] 正在扫描: {symbol}")
         klines = get_4h_klines(symbol)
         if not klines:
             print(f"⚠️ {symbol} 无K线数据，跳过\n")
