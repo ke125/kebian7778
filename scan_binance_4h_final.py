@@ -1,6 +1,6 @@
 import requests
 import pandas as pd
-import matplotlib.pyplot
+import matplotlib.pyplot as plt
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -19,7 +19,7 @@ def send_wechat_notification(symbol, price):
         print(f"❌ 微信提醒发送失败: {e}")
 
 # ----------------------
-# 1. 币安 API 工具函数（获取全部U本位永续合约）
+# 1. 币安 API 工具函数（U本位合约）
 # ----------------------
 def get_perpetual_symbols():
     """获取所有U本位永续合约币种列表"""
@@ -41,20 +41,25 @@ def get_perpetual_symbols():
         return []
 
 def get_4h_klines(symbol, limit=100):
-    """获取币种4小时K线数据"""
+    """获取币种4小时K线数据（增加2次重试，共3次尝试）"""
     url = "https://fapi.binance.com/fapi/v1/klines"
     params = {
         "symbol": symbol,
         "interval": "4h",
         "limit": limit
     }
-    try:
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        print(f"⚠️ {symbol} 获取K线失败: {e}")
-        return []
+    # 增加2次重试，总共尝试3次
+    for retry in range(3):
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            if retry < 2:  # 前两次失败重试
+                time.sleep(1)
+                continue
+            print(f"⚠️ {symbol} 获取K线失败（3次重试后）: {e}")
+            return []
 
 # ----------------------
 # 2. 指标计算函数
@@ -75,7 +80,7 @@ def calc_indicators(df):
     return df
 
 # ----------------------
-# 3. 形态匹配函数（你原来的 1 或 2 条件）
+# 3. 形态匹配函数（原逻辑不变）
 # ----------------------
 def match_all_patterns(df):
     """判断是否符合形态1或形态2"""
@@ -128,7 +133,7 @@ def plot_chart(symbol, df, filename):
     print(f"✅ 匹配成功: {symbol} → 已保存为 {filename}")
 
 # ----------------------
-# 5. 主程序（15线程 + 扫全部U本位 + 准确性第一）
+# 5. 主程序入口（15线程 + 2次重试 + 匹配上限10个不变）
 # ----------------------
 if __name__ == "__main__":
     symbols = get_perpetual_symbols()
@@ -140,9 +145,6 @@ if __name__ == "__main__":
     matched_symbols = []
     print(f"\n开始扫描全部 {len(symbols)} 个 USDT 永续合约...\n")
 
-    # ======================
-    # 你要的：15 线程
-    # ======================
     with ThreadPoolExecutor(max_workers=15) as executor:
         future_to_symbol = {executor.submit(get_4h_klines, s): s for s in symbols}
         
@@ -169,7 +171,7 @@ if __name__ == "__main__":
                 send_wechat_notification(symbol, last_price)
                 matched_symbols.append(symbol)
                 count += 1
-                if count >= 10:
+                if count >= 10:  # 匹配上限保持10个不变
                     break
 
     print(f"\n扫描结束！共匹配 {count} 个币种: {matched_symbols}")
