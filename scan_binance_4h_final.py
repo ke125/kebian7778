@@ -1,32 +1,52 @@
 import requests
 import pandas as pd
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+import hashlib
+import base64
+import hmac
 
-# ----------------------
-# 微信推送配置（Server酱）
-# ----------------------
-def send_wechat_notification(symbol, price, reason):
-    """发送微信提醒（Server酱）：只发文字，不发图表"""
-    url = "https://sctapi.ftqq.com/SCT32178TyIsGaxv6UsK7LUndka8fjg5.send"
-    content = (
-        f"📈 **检测到稳健突破信号！**\n\n"
-        f"💰 币种: {symbol}\n"
-        f"💎 当前价格: {price:.6f}\n"
-        f"📊 信号原因: {reason}\n"
-        f"⏰ 时间: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}\n\n"
-        f"✅ 核心条件：33日均线震荡 | 未跌破前低 | 放量突破4小时关键阻力"
-    )
+# ---------------------- 配置区 ----------------------
+# 企业微信机器人配置
+WEBHOOK_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=你的机器人key"  # 替换成你的机器人key
+SECRET = "SCT321178TyIsGaxv6Us5K7LUndka8fjg5"  # 你提供的secret
+
+def generate_signature(timestamp):
+    """生成企业微信签名"""
+    string_to_sign = f"{timestamp}\n{SECRET}"
+    hmac_code = hmac.new(
+        SECRET.encode("utf-8"),
+        string_to_sign.encode("utf-8"),
+        digestmod=hashlib.sha256
+    ).digest()
+    return base64.b64encode(hmac_code).decode("utf-8")
+
+def send_alert(message):
+    """发送企业微信机器人消息"""
+    print(f"📢 【警报】{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}：{message}")
+    
+    timestamp = int(datetime.now().timestamp())
+    signature = generate_signature(timestamp)
+    
+    payload = {
+        "msgtype": "text",
+        "text": {
+            "content": message
+        }
+    }
+    
+    params = {
+        "timestamp": timestamp,
+        "sign": signature
+    }
+    
     try:
-        resp = requests.get(url, params={"title": f"【信号提醒】{symbol}", "desp": content}, timeout=8)
+        resp = requests.post(WEBHOOK_URL, params=params, json=payload, timeout=10)
         resp.raise_for_status()
-        print(f"✅ 微信提醒发送成功: {symbol}")
+        print(f"✅ 企业微信提醒发送成功：{resp.json()}")
     except Exception as e:
-        print(f"❌ 微信发送失败: {e}")
+        print(f"❌ 企业微信提醒发送失败：{e}")
 
-# ----------------------
-# 1. 获取全部U本位永续合约
-# ----------------------
+# ---------------------- 工具函数 ----------------------
 def get_perpetual_symbols():
     url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
     try:
@@ -45,135 +65,104 @@ def get_perpetual_symbols():
         print(f"❌ 获取合约失败: {e}")
         return []
 
-# ----------------------
-# 2. 获取 1小时 K线 + 4小时 K线
-# ----------------------
-def get_1h_klines(symbol, limit=100):
+def get_4h_kline(symbol, limit=50):
     url = "https://fapi.binance.com/fapi/v1/klines"
-    params = {"symbol": symbol, "interval": "1h", "limit": limit}
-    for retry in range(3):
-        try:
-            resp = requests.get(url, params=params, timeout=12)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            if retry < 2:
-                time.sleep(1.5)
-                continue
-            print(f"⚠️ {symbol} 获取1小时K线失败")
-            return []
+    params = {
+        "symbol": symbol,
+        "interval": "4h",
+        "limit": limit
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        df = pd.DataFrame(data, columns=[
+            "timestamp", "open", "high", "low", "close", "volume",
+            "close_time", "quote_volume", "trades", "taker_buy_base",
+            "taker_buy_quote", "ignore"
+        ])
+        # 转换类型
+        df["close"] = df["close"].astype(float)
+        df["high"] = df["high"].astype(float)
+        df["volume"] = df["volume"].astype(float)
+        return df
+    except Exception as e:
+        print(f"❌ 获取 {symbol} K线失败: {e}")
+        return None
 
-def get_4h_klines_for_resistance(symbol, limit=100):
-    url = "https://fapi.binance.com/fapi/v1/klines"
-    params = {"symbol": symbol, "interval": "4h", "limit": limit}
-    for retry in range(3):
-        try:
-            resp = requests.get(url, params=params, timeout=12)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            if retry < 2:
-                time.sleep(1.5)
-                continue
-            print(f"⚠️ {symbol} 获取4小时K线失败")
-            return []
+def calc_ma(df, period):
+    return df["close"].rolling(window=period).mean()
 
-# ----------------------
-# 3. 计算指标
-# ----------------------
-def calc_indicators(df):
-    df["close"] = pd.to_numeric(df["close"])
-    df["high"] = pd.to_numeric(df["high"])
-    df["low"] = pd.to_numeric(df["low"])
-    df["volume"] = pd.to_numeric(df["volume"])
+def calc_macd(df, fast=12, slow=26, signal=9):
+    ema_fast = df["close"].ewm(span=fast, adjust=False).mean()
+    ema_slow = df["close"].ewm(span=slow, adjust=False).mean()
+    dif = ema_fast - ema_slow
+    dea = dif.ewm(span=signal, adjust=False).mean()
+    macd = (dif - dea) * 2
+    return dif, dea, macd
 
-    df["MA5"] = df["close"].rolling(5).mean()
-    df["MA10"] = df["close"].rolling(10).mean()
-    df["MA33"] = df["close"].rolling(33).mean()
-    df["VOL_MA5"] = df["volume"].rolling(5).mean()
-
-    exp1 = df["close"].ewm(span=12, adjust=False).mean()
-    exp2 = df["close"].ewm(span=26, adjust=False).mean()
-    df["DIF"] = exp1 - exp2
-    df["DEA"] = df["DIF"].ewm(span=9, adjust=False).mean()
-    df["MACD"] = (df["DIF"] - df["DEA"]) * 2
-    return df
-
-# ----------------------
-# 4. 核心形态：MA33震荡 + 未破前低 + 放量突破【4小时】关键阻力
-# ----------------------
-def match_robust_breakout(df_1h, df_4h):
-    if len(df_1h) < 33 or len(df_4h) < 33:
-        return False
-
-    last_1h = df_1h.iloc[-1]
-    recent_30_1h = df_1h.iloc[-30:]
-    
-    # 1. 价格在MA33附近震荡（±15%）
-    near_ma33 = (last_1h["close"] >= last_1h["MA33"] * 0.85) and (last_1h["close"] <= last_1h["MA33"] * 1.15)
-
-    # 2. 未跌破前期低点
-    all_time_low = df_1h["low"].min()
-    recent_low = recent_30_1h["low"].min()
-    not_broke_low = (recent_low >= all_time_low * 0.98)
-
-    # 3. 突破【4小时】前20根K线高点阻力
-    key_resistance_4h = df_4h["high"].iloc[-20:-1].max()
-    break_resistance = (last_1h["close"] > key_resistance_4h)
-
-    # 4. 明显放量
-    strong_volume = (last_1h["volume"] >= last_1h["VOL_MA5"] * 1.3)
-
-    # 5. 不过度暴涨（防追高）
-    ma_not_too_far = (last_1h["MA5"] <= last_1h["MA10"] * 1.1)
-
-    return near_ma33 and not_broke_low and break_resistance and strong_volume and ma_not_too_far
-
-# ----------------------
-# 主程序入口
-# ----------------------
-if __name__ == "__main__":
+# ---------------------- 核心扫描逻辑 ----------------------
+def scan_strong_bull():
     symbols = get_perpetual_symbols()
     if not symbols:
-        print("❌ 未获取到合约列表，退出任务")
-        exit()
+        return
 
-    count = 0
-    matched_symbols = []
-    print(f"\n开始扫描全市场 U 本位合约...\n")
+    alert_count = 0
+    for symbol in symbols:
+        df = get_4h_kline(symbol)
+        if df is None or len(df) < 33:
+            continue
 
-    with ThreadPoolExecutor(max_workers=15) as executor:
-        future_1h = {executor.submit(get_1h_klines, s): s for s in symbols}
-        future_4h = {executor.submit(get_4h_klines_for_resistance, s): s for s in symbols}
+        # 计算指标
+        df["ma5"] = calc_ma(df, 5)
+        df["ma10"] = calc_ma(df, 10)
+        df["ma33"] = calc_ma(df, 33)
+        df["dif"], df["dea"], df["macd"] = calc_macd(df)
+        df["vol_ma5"] = df["volume"].rolling(window=5).mean()
+        df["prev20_high"] = df["high"].rolling(window=20).max().shift(1)
 
-        for fut_1h in as_completed(future_1h):
-            symbol = future_1h[fut_1h]
-            klines_1h = fut_1h.result()
-            
-            klines_4h = future_4h[next(k for k, v in future_4h.items() if v == symbol)].result()
+        # 取最新一根K线数据
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
 
-            if not klines_1h or not klines_4h:
-                continue
+        # ---------------------- 看涨形态判断 ----------------------
+        # 条件1：价格站上所有均线
+        condition_ma = (
+            last["close"] > last["ma5"] and
+            last["close"] > last["ma10"] and
+            last["close"] > last["ma33"]
+        )
 
-            try:
-                df_1h = pd.DataFrame(klines_1h, columns=["t","o","h","l","c","v","1","2","3","4","5","6"])
-                df_4h = pd.DataFrame(klines_4h, columns=["t","o","h","l","c","v","1","2","3","4","5","6"])
-                
-                df_1h = calc_indicators(df_1h)
-                df_4h = calc_indicators(df_4h)
+        # 条件2：MACD 金叉 或 处于多头区间
+        condition_macd = (
+            (prev["dif"] < prev["dea"] and last["dif"] > last["dea"]) or
+            (last["dif"] > last["dea"])
+        )
 
-                if match_robust_breakout(df_1h, df_4h):
-                    last_price = float(df_1h["close"].iloc[-1])
-                    reason = "✅ 33日均线震荡 | 未破前低 | 放量突破4小时关键阻力"
-                    
-                    # 只发微信文字提醒，不再画图
-                    send_wechat_notification(symbol, last_price, reason)
-                    
-                    matched_symbols.append(symbol)
-                    count += 1
-                    if count >= 10:
-                        break
-            except Exception as e:
-                continue
+        # 条件3：成交量放量（超过5日均量1.5倍）
+        condition_volume = last["volume"] > 1.5 * last["vol_ma5"]
 
-    print(f"\n扫描结束！本次匹配到 {count} 个币种: {matched_symbols}")
+        # 条件4：价格突破近期20根K线高点
+        condition_break = last["close"] > last["prev20_high"]
+
+        # 满足 均线多头 + (MACD多头 或 放量突破) 就提醒
+        if condition_ma and (condition_macd or condition_volume or condition_break):
+            alert_msg = (
+                f"🚀 币安U本位合约看涨信号\n"
+                f"交易对：{symbol}\n"
+                f"当前价格：{last['close']:.4f}\n"
+                f"触发条件：\n"
+                f"• 均线多头排列：{condition_ma}\n"
+                f"• MACD 多头：{condition_macd}\n"
+                f"• 放量：{condition_volume}\n"
+                f"• 突破前高：{condition_break}\n"
+                f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            send_alert(alert_msg)
+            alert_count += 1
+
+    print(f"\n📊 扫描完成，共发现 {alert_count} 个看涨信号")
+
+# ---------------------- 执行扫描 ----------------------
+if __name__ == "__main__":
+    scan_strong_bull()
