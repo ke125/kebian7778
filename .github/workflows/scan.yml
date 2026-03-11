@@ -1,18 +1,9 @@
-name: Scan Binance
+name: Test Scan
 on:
-  schedule:
-    - cron: '5 16-23 * * *'
-    - cron: '5 0-8 * * *'
-   workflow_dispatch:
+  workflow_dispatch:
+
 jobs:
-  run-scan:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-      - run: |
-          python -m pip install --upgrade pip
-          pip install requests pandas python-binance
-      - run: python scan_binance_4h_final.py
+      - run: echo "Hello World"
