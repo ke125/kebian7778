@@ -1,52 +1,36 @@
-# -*- coding: utf-8 -*-
-"""
-时间脚本（纯净版）
-适用于：定时任务 / 北京时间校准 / 时间显示
-"""
+name: 扫描币安U本位合约
 
-import time
-from datetime import datetime, timedelta
+# 定时执行规则：
+# 采用 UTC 时间（比北京时间晚8小时）
+# 每4小时收盘后5分钟运行一次：00:05、04:05、08:05、12:05、16:05、20:05 (UTC)
+# 对应北京时间：08:05、12:05、16:05、20:05、00:05、04:05
+on:
+  schedule:
+    - cron: '5 0,4,8,12,16,20 * * *'
+  workflow_dispatch: # 允许手动触发
 
-# --------------------------
-# 获取当前北京时间（UTC+8）
-# --------------------------
-def get_beijing_time():
-    utc_now = datetime.utcnow()
-    beijing = utc_now + timedelta(hours=8)
-    return beijing
+jobs:
+  run-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-# --------------------------
-# 打印格式化时间
-# --------------------------
-def print_time():
-    now = get_beijing_time()
-    print("=================================")
-    print(f"📅 当前日期: {now.strftime('%Y-%m-%d')}")
-    print(f"🕒 当前时间: {now.strftime('%H:%M:%S')}")
-    print(f"🌏 时区: 北京时间（UTC+8）")
-    print("=================================\n")
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-# --------------------------
-# 定时任务示例（每天早上 8:00 提醒）
-# --------------------------
-def wait_8am():
-    while True:
-        now = get_beijing_time()
-        target = now.replace(hour=8, minute=0, second=0, microsecond=0)
-        if now > target:
-            target += timedelta(days=1)
-        
-        delta = target - now
-        print(f"⏳ 下次提醒: {target.strftime('%Y-%m-%d %H:%M')}")
-        print(f"剩余时间: {str(delta).split('.')[0]}\n")
-        
-        time.sleep(60) # 每分钟检查一次
+      - name: 安装依赖库
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas matplotlib
 
-# --------------------------
-# 主函数（可根据需要选择执行）
-# --------------------------
-if __name__ == "__main__":
-    print_time()
-    
-    # 如需定时任务，取消下面注释
-    # wait_8am()
+      - name: 运行扫描脚本
+        run: python scan_binance_4h_final.py
+
+      - name: 上传图表文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: k线图表
+          path: match_*.png # 上传匹配到的币种图片
+        if: success() # 只有脚本运行成功才会上传（防止上传空文件）
